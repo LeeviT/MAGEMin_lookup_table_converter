@@ -32,7 +32,7 @@ filtereddf.Cp = parse.(Float64, filtereddf.Cp)
 
 # print(first(filtereddf, 10))
 
-# Write the metadata and headers 
+# Write the metadata and headers in PerpleX format
 open("./delim_file.txt", "w") do f
     write(f, "|6.6.6\nmetabasite-mb.tab\n\t\t2\nT(K)\n\t273.15\n\t17.1875\n\t\t129\nP(bar)\n\t10\n\t3281.171875\n\t\t129\n\t\t8\nT(K)\tP(bar)\trho,kg/m3\talpha,1/K\tcp,J/K/kg\tvp,km/s\tvs,km/s\th,J/kg")
 end
