@@ -18,18 +18,25 @@ filtereddf = @chain df begin
     enthalpy = var"Enthalpy[J]", Vp = var"Vp[km/s]", Vs = var"Vs[km/s]")
     # Filter out data of individual minerals and preserve bulk rock (=system) composition data  
     @filter(phase == "system")
+    @mutate(alphafilt = case_when(alpha < 0.0 => 0.0, alpha > 0.0 => alpha))
     # Convert pressure from kbar to bar and temperature from celsius to kelvin 
     @mutate(P = 1e3 * P, T = 273.15 + T)
     # Drop the 'phase' column and reorder the columns for PerpleX format
-    TidierData.@select(T, P, density, alpha, Cp, Vp, Vs, enthalpy)
+    TidierData.@select(T, P, density, alphafilt, Cp, Vp, Vs, enthalpy)
     @arrange(P, T)
 end
+
+# print(filtereddf.alphafilt)
 
 # Filter out the square brackets from the heat capacity column, and convert it from string
 # to 64-bit float
 filtereddf.Cp = strip.(filtereddf.Cp, '[')
 filtereddf.Cp = strip.(filtereddf.Cp, ']')
 filtereddf.Cp = parse.(Float64, filtereddf.Cp)
+
+filtereddf = @chain filtereddf begin
+    @mutate(Cpfilt = case_when(Cp < 1000.0 => 1000.0, Cp > 6000.0 => 6000.0, Cp > 0.0 => Cp))
+end
 
 # Write the metadata and headers in PerpleX format
 open("./delim_file.txt", "w") do io
@@ -45,34 +52,45 @@ end
 # end
 # df[:,3] = rhoporo
 
-Plots.CURRENT_PLOT.nullableplot = nothing
+# Plots.CURRENT_PLOT.nullableplot = nothing
 # display(plot!(porosityscaling(df[:,2])[1], porosityscaling(df[:,2])[2], yflip=true))
 plottingT = filtereddf.T[1:129] .- 273.15
 plottingP = filtereddf.P[1:129:16641] ./ 1e4
-f = Figure(backgroundcolor = RGBf(0.9, 0.79, 0.78), size = (1000, 400))
-ga = f[1, 1] = GridLayout()
-axleft = Axis(ga[1, 1], ylabel = "pressure (GPa)")
-axcenter = Axis(ga[1, 2], xlabel = "temperature (°C)")
-axright = Axis(ga[1, 3])
-linkyaxes!(axleft, axcenter, axright)
-linkxaxes!(axleft, axcenter, axright)
-labels = ["density", "heat capacity", "heat expansivity"]
-hmdensity = CairoMakie.heatmap!(axleft, plottingT, plottingP, reshape(filtereddf.density, 129, 129), colormap = Reverse(:imola))
-hmCp = CairoMakie.heatmap!(axcenter, plottingT, plottingP, reshape(filtereddf.Cp, 129, 129), colormap = Reverse(:acton))
-hmalpha = CairoMakie.heatmap!(axright, plottingT, plottingP, reshape(filtereddf.alpha, 129, 129), colormap = Reverse(:nuuk)) 
-cbdensity = Colorbar(ga[0, 1][1, 1], hmdensity, label = "density (kg/m^3)", vertical = false, spinewidth = 0.2, labelpadding = 1.5, labelsize = 12, ticklabelpad = 0.5, ticklabelsize = 10)
-cbCp = Colorbar(ga[0, 2][1, 1], hmCp, label = "heat capacity (J/°C)", vertical = false, spinewidth = 0.2, labelpadding = 1.5, labelsize = 12, ticklabelpad = 0.5, ticklabelsize = 10)
-cbalpha= Colorbar(ga[0, 3][1, 1], hmalpha, label = "thermal expansivity (1/°C)", vertical = false, spinewidth = 0.2, labelpadding = 1.5, labelsize = 12, ticklabelpad = 0.5, ticklabelsize = 10)
-CairoMakie.ylims!(axright, low = 0)
-CairoMakie.xlims!(axright, low = 0)
-hidespines!(axleft)
-hidespines!(axcenter)
-hidespines!(axright)
-hideydecorations!(axright, grid = false)
-hideydecorations!(axcenter, grid = false)
-colgap!(ga, 10)
-rowgap!(ga, 10)
-display(f)
+with_theme(theme_latexfonts()) do
+    f = Figure(backgroundcolor = RGBf(0.9, 0.79, 0.78), size = (1000, 400))
+    ga = f[1, 1] = GridLayout()
+    axleft = Axis(ga[1, 1], ylabel = L"\mathrm{pressure\; (GPa)}", ylabelsize = 12, yticksize = 3, xticksize = 3, xticklabelsize = 10, yticklabelsize = 10, xticklabelpad = 0.5, yticklabelpad = 0.5)
+    axcenter = Axis(ga[1, 2], xlabel = L"\mathrm{temperature\; (\degree C)}", xlabelsize = 12, xticksize = 3, xticklabelsize = 10, xticklabelpad = 0.5)
+    axright = Axis(ga[1, 3], xticksize = 3, xticklabelsize = 10, xticklabelpad = 0.5)
+    linkyaxes!(axleft, axcenter, axright)
+    linkxaxes!(axleft, axcenter, axright)
+
+    # Plot the heatmaps for each three properties
+    hmdensity = CairoMakie.heatmap!(axleft, plottingT, plottingP, reshape(filtereddf.density, 129, 129), colormap = Reverse(:imola))
+    hmCp = CairoMakie.heatmap!(axcenter, plottingT, plottingP, reshape(filtereddf.Cpfilt, 129, 129), colormap = Reverse(:acton))
+    hmalpha = CairoMakie.heatmap!(axright, plottingT, plottingP, reshape(filtereddf.alphafilt, 129, 129), colormap = Reverse(:nuuk)) 
+    # Create the colorbars for heatmaps
+    cbdensity = Colorbar(ga[0, 1][1, 1], hmdensity, label = L"\mathrm{density\; (kg/m^3)}", vertical = false, spinewidth = 0.1, labelpadding = 1.5, labelsize = 12, ticklabelpad = 0.5, ticklabelsize = 10, ticksize = 3)
+    cbCp = Colorbar(ga[0, 2][1, 1], hmCp, label = "heat capacity (J/°C)", vertical = false, spinewidth = 0.1, labelpadding = 1.5, labelsize = 12, ticklabelpad = 0.5, ticklabelsize = 10, ticksize = 3)
+    cbalpha= Colorbar(ga[0, 3][1, 1], hmalpha, label = "thermal expansivity (1/°C)", vertical = false, spinewidth = 0.1, labelpadding = 1.5, labelsize = 12, ticklabelpad = 0.5, ticklabelsize = 10, ticksize = 3)
+    # Bring the grid visible
+    CairoMakie.translate!(hmdensity, 0, 0, -100)
+    CairoMakie.translate!(hmCp, 0, 0, -100)
+    CairoMakie.translate!(hmalpha, 0, 0, -100)
+
+
+    # Do some beautification for the plots 
+    CairoMakie.ylims!(axright, low = 0)
+    CairoMakie.xlims!(axright, low = 0)
+    hidespines!(axleft)
+    hidespines!(axcenter)
+    hidespines!(axright)
+    hideydecorations!(axright, grid = false)
+    hideydecorations!(axcenter, grid = false)
+    colgap!(ga, 10)
+    rowgap!(ga, 10)
+    display(f)
+end
 # CSV.write("./morb_basalt_pmax27GPa_poro_ig.csv", df, delim='\t')
 
 function porosityscaling(pressure)
