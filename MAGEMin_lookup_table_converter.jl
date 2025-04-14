@@ -35,7 +35,7 @@ filtereddf.Cp = strip.(filtereddf.Cp, ']')
 filtereddf.Cp = parse.(Float64, filtereddf.Cp)
 
 filtereddf = @chain filtereddf begin
-    @mutate(Cpfilt = case_when(Cp < 1000.0 => 1000.0, Cp > 6000.0 => 6000.0, Cp > 0.0 => Cp))
+    @mutate(Cpfilt = case_when(Cp < 750.0 => 750.0, Cp > 6000.0 => 6000.0, Cp > 0.0 => Cp))
 end
 
 # Write the metadata and headers in PerpleX format
@@ -44,6 +44,7 @@ open("./delim_file.txt", "w") do io
     writedlm(io, eachrow(filtereddf), '\t')
 end
 
+# print(round(minimum(filtereddf.density), sigdigits = 3))
 
 # phi = porosityscaling(df[:,2])[1]
 # rhoporo = zeros(16641)
@@ -59,21 +60,32 @@ plottingP = filtereddf.P[1:129:16641] ./ 1e4
 with_theme(theme_latexfonts()) do
     f = Figure(backgroundcolor = RGBf(0.9, 0.79, 0.78), size = (1000, 400))
     ga = f[1, 1] = GridLayout()
-    axleft = Axis(ga[1, 1], ylabel = L"\mathrm{pressure\; (GPa)}", ylabelsize = 12, yticksize = 3, xticksize = 3, xticklabelsize = 10, yticklabelsize = 10, xticklabelpad = 0.5, yticklabelpad = 0.5)
-    axcenter = Axis(ga[1, 2], xlabel = L"\mathrm{temperature\; (\degree C)}", xlabelsize = 12, xticksize = 3, xticklabelsize = 10, xticklabelpad = 0.5)
-    axright = Axis(ga[1, 3], xticksize = 3, xticklabelsize = 10, xticklabelpad = 0.5)
+    axleft = Axis(ga[1, 1], ylabel = "pressure (GPa)", tellwidth = false, width = 300, ylabelsize = 12, yticksize = 3, xticksize = 3, xticklabelsize = 10, yticklabelsize = 10, xticklabelpad = 0.5, yticklabelpad = 0.5)
+    axcenter = Axis(ga[1, 2], xlabel = L"temperature ($\degree$ C)", tellwidth = false, width = 300, xlabelsize = 12, xticksize = 3, xticklabelsize = 10, xticklabelpad = 0.5)
+    axright = Axis(ga[1, 3], tellwidth = false, width = 300, xticksize = 3, xticklabelsize = 10, xticklabelpad = 0.5)
     linkyaxes!(axleft, axcenter, axright)
     linkxaxes!(axleft, axcenter, axright)
 
     # Plot the heatmaps for each three properties
     hmdensity = CairoMakie.heatmap!(axleft, plottingT, plottingP, reshape(filtereddf.density, 129, 129), colormap = Reverse(:imola))
-    hmCp = CairoMakie.heatmap!(axcenter, plottingT, plottingP, reshape(filtereddf.Cpfilt, 129, 129), colormap = Reverse(:acton))
+    hmCp = CairoMakie.heatmap!(axcenter, plottingT, plottingP, reshape(filtereddf.Cpfilt, 129, 129), colormap = Reverse(:glasgow))
     hmalpha = CairoMakie.heatmap!(axright, plottingT, plottingP, reshape(filtereddf.alphafilt, 129, 129), colormap = Reverse(:nuuk)) 
     # Create the colorbars for heatmaps
-    cbdensity = Colorbar(ga[0, 1][1, 1], hmdensity, label = L"\mathrm{density\; (kg/m^3)}", vertical = false, spinewidth = 0.1, labelpadding = 1.5, labelsize = 12, ticklabelpad = 0.5, ticklabelsize = 10, ticksize = 3)
-    cbCp = Colorbar(ga[0, 2][1, 1], hmCp, label = "heat capacity (J/°C)", vertical = false, spinewidth = 0.1, labelpadding = 1.5, labelsize = 12, ticklabelpad = 0.5, ticklabelsize = 10, ticksize = 3)
-    cbalpha= Colorbar(ga[0, 3][1, 1], hmalpha, label = "thermal expansivity (1/°C)", vertical = false, spinewidth = 0.1, labelpadding = 1.5, labelsize = 12, ticklabelpad = 0.5, ticklabelsize = 10, ticksize = 3)
-    # Bring the grid visible
+    cbdensity = Colorbar(ga[0, 1][1, 1], hmdensity, label = L"density (kg/m$^3$)", vertical = false, 
+        tellwidth = false, width = 270, spinewidth = 0.1, labelpadding = 1.5, labelsize = 12, 
+        ticklabelpad = 0.5, ticklabelsize = 10, ticksize = 3.5, 
+        ticks = [round(minimum(filtereddf.density), sigdigits = 4), 2500, 3000, 3500, 4000, round(maximum(filtereddf.density), sigdigits = 4)],
+        minorticks = [2250, 2750, 3250, 3750, 4250], minorticksvisible = true, minorticksize = 2.5, minortickwidth = 0.75)
+    cbCp = Colorbar(ga[0, 2][1, 1], hmCp, label = L"heat capacity (J/$\degree$C)", vertical = false, 
+        tellwidth = false, width = 270, spinewidth = 0.1, labelpadding = 1.5, labelsize = 12, 
+        ticklabelpad = 0.5, ticklabelsize = 10, ticksize = 3.5, ticks = [750, 2000, 4000, 6000], 
+        minorticks = [1000, 3000, 5000], minorticksvisible = true, minorticksize = 2.5, minortickwidth = 0.75)
+    cbalpha = Colorbar(ga[0, 3][1, 1], hmalpha, label = L"thermal expansivity (1/$\degree$C)", vertical = false, 
+        tellwidth = false, width = 270, spinewidth = 0.1, labelpadding = 1.5, labelsize = 12, 
+        ticklabelpad = 0.5, ticklabelsize = 10, ticksize = 3.5,
+        ticks = [round(minimum(filtereddf.alphafilt), sigdigits = 2), 1e-4, 2e-4, round(maximum(filtereddf.alphafilt), sigdigits = 2)],
+        minorticks = [0.5e-4, 1.5e-4, 2.5e-4], minorticksvisible = true, minorticksize = 2.5, minortickwidth = 0.75)
+    # Bring the grid up to make it visible
     CairoMakie.translate!(hmdensity, 0, 0, -100)
     CairoMakie.translate!(hmCp, 0, 0, -100)
     CairoMakie.translate!(hmalpha, 0, 0, -100)
