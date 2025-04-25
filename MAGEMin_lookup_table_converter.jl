@@ -5,6 +5,18 @@
 # plotting, TidierData for filtering/manipulating data, DelimitedFiles for output.
 using DataFrames, CSV, CairoMakie, TidierData, DelimitedFiles
 
+function porosityscaling(pressure, resolution)
+    rho0 = 2900.0
+    g = 9.81
+    phi0 = 0.678
+    m = 0.008
+    n = 89.53
+    # First, convert lithostatic pressure p=\rho*g*h to h=depth in km
+    depth = (100.0 .* pressure[1:resolution:resolution^2]) / (rho0 * g)
+    phi = phi0 ./ (1 .+ m .* depth) .^ n
+    return phi
+end
+
 # Filename of a lookup table to process, let us assume it is located in a same folder as this 
 # processor script. Also define the output filepath.
 inputtablefilepath = joinpath(".", "morb_basalt_high_reso_ig.csv")
@@ -38,17 +50,30 @@ filtereddf.Cp = strip.(filtereddf.Cp, ']')
 filtereddf.Cp = parse.(Float64, filtereddf.Cp)
 
 filtereddf = @chain filtereddf begin
-    @mutate(Cpfilt = case_when(Cp < 750.0 => 750.0, Cp > 1500.0 => 1500.0, Cp > 0.0 => Cp))
+    @mutate(Cp = case_when(Cp < 750.0 => 750.0, Cp > 1500.0 => 1500.0, Cp > 0.0 => Cp))
 end
 
-open("./delim_file.txt", "w") do io
-    # Write the metadata and headers in PerpleX format.
-    write(io, "|6.6.6\nmetabasite-mb.tab\n\t\t2\nT(K)\n\t273.15\n\t17.1875\n\t\t129\nP(bar)\n\t10\n"
-        * "\t3281.171875\n\t\t129\n\t\t8\nT(K)\tP(bar)\trho,kg/m3\talpha,1/K\tcp,J/K/kg\tvp,km/s"
-        * "\tvs,km/s\th,J/kg\n")
-    # Write the actual phase diagram data.
-    writedlm(io, eachrow(filtereddf), '\t')
+# Find the last temperature column by column index, which has temperature < 500 °C.
+Tlimitcoli = findlast(x -> x < 600 + 273.15, filtereddf.T[1:resolution])
+compdensity = reshape(filtereddf.density[1:resolution] 
+    * exp.(1e-11 * 1e5 .* filtereddf.P[1:resolution:resolution^2])', resolution, resolution)
+for i in eachindex(filtereddf.T)
+    Pscaling = filtereddf.P[1:resolution:resolution^2]
+    (i >= 1 || 1 == mod(i, resolution)) && Tlimitcoli > mod(i - 1, resolution) + 1 ? 
+    filtereddf.density[i] = compdensity[i] : 0
 end
+
+phioceanic = porosityscaling(filtereddf.P, resolution)
+filtereddf.density = reshape((reshape(filtereddf.density, resolution, resolution)' .* (1.0 .- phioceanic) .+ 2600.0 .* phioceanic)', resolution^2)
+
+# open("./morb_gabbro-ig.txt", "w") do io
+    # Write the metadata and headers in PerpleX format.
+#    write(io, "|6.6.6\nmorb_gabbro-ig.tab\n\t\t2\nT(K)\n\t273.15\n\t17.1875\n\t\t129\nP(bar)\n\t10\n"
+#        * "\t3281.171875\n\t\t129\n\t\t8\nT(K)\tP(bar)\trho,kg/m3\talpha,1/K\tcp,J/K/kg\tvp,km/s"
+#        * "\tvs,km/s\th,J/kg\n")
+    # Write the actual phase diagram data.
+#    writedlm(io, eachrow(filtereddf), '\t')
+# end
 
 # Arrays for plotting in celcius degrees and gigapascals.
 plottingT = filtereddf.T[1:resolution] .- 273.15
@@ -64,7 +89,7 @@ plottingP = filtereddf.P[1:resolution:resolution^2] ./ 1e4
     axleft = Axis(ga[1, 1], ylabel = "pressure (GPa)", tellwidth = false, width = 300, 
         ylabelsize = 12, yticksize = 3, xticksize = 3, xticklabelsize = 10, yticklabelsize = 10, 
         xticklabelpad = 0.5, yticklabelpad = 0.5)
-    axcenter = Axis(ga[1, 2], xlabel = L"temperature ($\degree$ C)", tellwidth = false, width = 300,
+    axcenter = Axis(ga[1, 2], xlabel = L"temperature ($\degree$C)", tellwidth = false, width = 300,
         xlabelsize = 12, xticksize = 3, xticklabelsize = 10, xticklabelpad = 0.5)
     axright = Axis(ga[1, 3], tellwidth = false, width = 300, xticksize = 3, xticklabelsize = 10, 
         xticklabelpad = 0.5)
@@ -76,7 +101,7 @@ plottingP = filtereddf.P[1:resolution:resolution^2] ./ 1e4
     hmdensity = CairoMakie.heatmap!(axleft, plottingT, plottingP, 
         reshape(filtereddf.density, resolution, resolution), colormap = Reverse(:imola))
     hmCp = CairoMakie.heatmap!(axcenter, plottingT, plottingP, 
-        reshape(filtereddf.Cpfilt, resolution, resolution), colormap = Reverse(:glasgow))
+        reshape(filtereddf.Cp, resolution, resolution), colormap = Reverse(:glasgow))
     hmalpha = CairoMakie.heatmap!(axright, plottingT, plottingP, 
         reshape(filtereddf.alphafilt, resolution, resolution) .* 1e4, colormap = Reverse(:nuuk)) 
     # Create the colorbars for heatmaps.
@@ -89,7 +114,7 @@ plottingP = filtereddf.P[1:resolution:resolution^2] ./ 1e4
         minortickwidth = 0.75, labelfont=:regular)
     cbCp = Colorbar(ga[0, 2][1, 1], hmCp, label = L"heat capacity (J/$\degree$C)", vertical = false, 
         tellwidth = false, width = 270, spinewidth = 0.1, labelpadding = 1.5, labelsize = 12, 
-        ticklabelpad = 0.5, ticklabelsize = 10, ticksize = 3.5, ticks = [750, 2000, 4000, 6000], 
+        ticklabelpad = 0.5, ticklabelsize = 10, ticksize = 3.5, ticks = [750, 1000, 1250, 1500], 
         minorticks = [1000, 3000, 5000], minorticksvisible = true, minorticksize = 2.5, 
         minortickwidth = 0.75)
     cbalpha = Colorbar(ga[0, 3][1, 1], hmalpha, label = L"thermal expansivity ($10^{-4}/\degree$C)",
@@ -117,15 +142,3 @@ plottingP = filtereddf.P[1:resolution:resolution^2] ./ 1e4
     rowgap!(ga, 10)
     display(f)
 # end
-
-function porosityscaling(pressure)
-    rho0 = 2900.0
-    g = 9.81
-    phi0 = 0.678
-    m = 0.008
-    n = 89.53
-    # First, convert lithostatic pressure p=\rho*g*h to h=depth in km
-    depth = (1.0e2 * pressure[1:129:16641]) / (rho0 * g)
-    phi = phi0 ./ (1 .+ m.*depth).^n
-    return phi, depth
-end
