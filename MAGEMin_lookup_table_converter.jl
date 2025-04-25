@@ -18,8 +18,13 @@ function porosityscaling(pressure, resolution)
 end
 
 # Filename of a lookup table to process, let us assume it is located in a same folder as this 
-# processor script. Also define the output filepath.
-inputtablefilepath = joinpath(".", "morb_basalt_high_reso_ig.csv")
+# processor script. Also define the output filepath, note that ASPECT reads only .txt tables.
+inputtablefolder = "."
+inputtablefilename = "morb_basalt_high_reso_ig.csv"
+outputtablefolder = "."
+outputtablefilename = "morb_basalt-ig-test.txt"
+inputtablefilepath = joinpath(inputtablefolder, inputtablefilename)
+outputtablefilepath = joinpath(outputtablefolder, outputtablefilename)
 
 # Read in a table to initialize a dataframe.
 df = DataFrame(CSV.File(inputtablefilepath))
@@ -43,8 +48,7 @@ filtereddf = @chain df begin
     @arrange(P, T)
 end
 
-# Remove the square brackets from the heat capacity column, and convert it from string to 64-bit
-# float.
+# Remove the square brackets from the heat capacity column, and convert it from string to float.
 filtereddf.Cp = strip.(filtereddf.Cp, '[')
 filtereddf.Cp = strip.(filtereddf.Cp, ']')
 filtereddf.Cp = parse.(Float64, filtereddf.Cp)
@@ -66,23 +70,25 @@ end
 phioceanic = porosityscaling(filtereddf.P, resolution)
 filtereddf.density = reshape((reshape(filtereddf.density, resolution, resolution)' .* (1.0 .- phioceanic) .+ 2600.0 .* phioceanic)', resolution^2)
 
-# open("./morb_gabbro-ig.txt", "w") do io
+open(outputtablefilepath, "w") do io
     # Write the metadata and headers in PerpleX format.
-#    write(io, "|6.6.6\nmorb_gabbro-ig.tab\n\t\t2\nT(K)\n\t273.15\n\t17.1875\n\t\t129\nP(bar)\n\t10\n"
-#        * "\t3281.171875\n\t\t129\n\t\t8\nT(K)\tP(bar)\trho,kg/m3\talpha,1/K\tcp,J/K/kg\tvp,km/s"
-#        * "\tvs,km/s\th,J/kg\n")
+    write(io, "|6.6.6\n" * replace(outputtablefilename, ".txt" => ".tab") * "\n\t\t2\nT(K)\n" 
+        * "\t" * string(filtereddf.T[1]) * "\n\t" * string(filtereddf.T[2] - filtereddf.T[1]) * "\n"
+        * "\t\t" * string(resolution) * "\nP(bar)\n\t" * string(filtereddf.P[1]) * "\n"
+        * "\t3281.171875\n\t\t129\n\t\t8\nT(K)\tP(bar)\trho,kg/m3\talpha,1/K\tcp,J/K/kg\tvp,km/s"
+        * "\tvs,km/s\th,J/kg\n")
     # Write the actual phase diagram data.
-#    writedlm(io, eachrow(filtereddf), '\t')
-# end
+    writedlm(io, eachrow(filtereddf), '\t')
+end
 
 # Arrays for plotting in celcius degrees and gigapascals.
 plottingT = filtereddf.T[1:resolution] .- 273.15
 plottingP = filtereddf.P[1:resolution:resolution^2] ./ 1e4
 
 # Use LaTeX font for plotting.
-# with_theme(theme_latexfonts()) do
+with_theme(theme_latexfonts()) do
     # Define light rose-ish background color for the plots.
-    f = Figure(backgroundcolor = RGBf(0.9, 0.79, 0.78), size = (1000, 400), fonts = (;regular = "TeX Gyre Pagella Makie"))
+    f = Figure(backgroundcolor = RGBf(0.9, 0.79, 0.78), size = (1000, 400))
     # Layout with square subplots. 
     ga = f[1, 1] = GridLayout()
     # Define axis features for left, center and right subplots.
@@ -141,4 +147,4 @@ plottingP = filtereddf.P[1:resolution:resolution^2] ./ 1e4
     colgap!(ga, 10)
     rowgap!(ga, 10)
     display(f)
-# end
+end
