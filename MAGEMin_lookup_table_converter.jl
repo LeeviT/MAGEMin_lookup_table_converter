@@ -6,7 +6,7 @@
 using DataFrames, CSV, CairoMakie, TidierData, DelimitedFiles
 
 function porosityscaling(pressure, resolution)
-    rho0 = 2900.0
+    rho0 = 2500.0
     g = 9.81
     phi0 = 0.678
     m = 0.008
@@ -20,15 +20,15 @@ end
 # Filename of a lookup table to process, let us assume it is located in a same folder as this 
 # processor script. Also define the output filepath, note that ASPECT reads only .txt tables.
 inputtablefolder = "."
-inputtablefilename = "morb_basalt_high_reso_ig.csv"
+inputtablefilename = "pelite-h20undersaturated-reso263k-p15gpa-t2000c_mpe.csv"
 outputtablefolder = "."
-outputtablefilename = "morb_basalt-ig-test.txt"
+outputtablefilename = "pelite-h20undersaturated_mpe.txt"
 inputtablefilepath = joinpath(inputtablefolder, inputtablefilename)
 outputtablefilepath = joinpath(outputtablefolder, outputtablefilename)
 
 # Read in a table to initialize a dataframe.
 df = DataFrame(CSV.File(inputtablefilepath))
-resolution = 128 * 2 + 1
+resolution = 128 * 4 + 1
 
 # A macro to filter and modify a dataframe in MAGEMin format
 filtereddf = @chain df begin
@@ -57,26 +57,39 @@ filtereddf = @chain filtereddf begin
     @mutate(Cp = case_when(Cp < 750.0 => 750.0, Cp > 1500.0 => 1500.0, Cp > 0.0 => Cp))
 end
 
-# Find the last temperature column by column index, which has temperature < 500 °C.
-Tlimitcoli = findlast(x -> x < 600 + 273.15, filtereddf.T[1:resolution])
-compdensity = reshape(filtereddf.density[1:resolution] 
-    * exp.(1e-11 * 1e5 .* filtereddf.P[1:resolution:resolution^2])', resolution, resolution)
-for i in eachindex(filtereddf.T)
-    Pscaling = filtereddf.P[1:resolution:resolution^2]
-    (i >= 1 || 1 == mod(i, resolution)) && Tlimitcoli > mod(i - 1, resolution) + 1 ? 
-    filtereddf.density[i] = compdensity[i] : 0
-end
+# Find the last temperature column by column index, which has temperature < 450 °C.
+# Tlimitcoli = findlast(x -> x < -450 + 273.15, filtereddf.T[1:resolution])
+# compdensity = reshape(filtereddf.density[1:resolution] 
+#     * exp.(1e-11 * 1e5 .* filtereddf.P[1:resolution:resolution^2])', resolution, resolution)
+# for i in eachindex(filtereddf.T)
+#     Pscaling = filtereddf.P[1:resolution:resolution^2]
+#     (i >= 1 || 1 == mod(i, resolution)) && Tlimitcoli > mod(i - 1, resolution) + 1 ? 
+#     filtereddf.density[i] = compdensity[i] : 0
+# end
 
 phioceanic = porosityscaling(filtereddf.P, resolution)
-filtereddf.density = reshape((reshape(filtereddf.density, resolution, resolution)' .* (1.0 .- phioceanic) .+ 2600.0 .* phioceanic)', resolution^2)
+filtereddf.density = reshape((reshape(filtereddf.density, resolution, resolution)' .* (1.0 .- phioceanic) .+ 1000.0 .* phioceanic)', resolution^2)
+
+filtereddf = @chain filtereddf begin
+    @mutate(density = case_when(density < 2400.0 => 2400.0, density > 4200.0 => 4200.0, density > 0.0 => density))
+end
 
 open(outputtablefilepath, "w") do io
     # Write the metadata and headers in PerpleX format.
-    write(io, "|6.6.6\n" * replace(outputtablefilename, ".txt" => ".tab") * "\n\t\t2\nT(K)\n" 
-        * "\t" * string(filtereddf.T[1]) * "\n\t" * string(filtereddf.T[2] - filtereddf.T[1]) * "\n"
-        * "\t\t" * string(resolution) * "\nP(bar)\n\t" * string(filtereddf.P[1]) * "\n"
-        * "\t3281.171875\n\t\t129\n\t\t8\nT(K)\tP(bar)\trho,kg/m3\talpha,1/K\tcp,J/K/kg\tvp,km/s"
-        * "\tvs,km/s\th,J/kg\n")
+    write(io, 
+        "|6.6.6\n"                                                  # PerpleX version
+        * replace(outputtablefilename, ".txt" => ".tab") * "\n"     # Lookup table name
+        * "\t\t2\n"                                                 # No. independent variables (T and P)
+        * "T(K)\n"                                                  # Temperature parameters
+        * "\t" * string(filtereddf.T[1]) * "\n"                     # The lower limit of temperature 
+        * "\t" * string(filtereddf.T[2] - filtereddf.T[1]) * "\n"   # The upper limit of temperature
+        * "\t\t" * string(resolution) * "\n"                        # Temperature resolution
+        * "P(bar)\n"                                                # Pressure parameters
+        * "\t" * string(filtereddf.P[1]) * "\n"                     # The lower limit of pressure
+        * "\t" * string(filtereddf.P[resolution + 1] - filtereddf.P[1]) * "\n" # The upper limit of pressure
+        * "\t\t" * string(resolution) * "\n"                        # Pressure resolution
+        * "\t\t8\n"                                                 # Number of columns
+        * "T(K)\tP(bar)\trho,kg/m3\talpha,1/K\tcp,J/K/kg\tvp,km/s\tvs,km/s\th,J/kg\n") # Column names and units
     # Write the actual phase diagram data.
     writedlm(io, eachrow(filtereddf), '\t')
 end
@@ -88,16 +101,16 @@ plottingP = filtereddf.P[1:resolution:resolution^2] ./ 1e4
 # Use LaTeX font for plotting.
 with_theme(theme_latexfonts()) do
     # Define light rose-ish background color for the plots.
-    f = Figure(backgroundcolor = RGBf(0.9, 0.79, 0.78), size = (1000, 400))
+    f = Figure(backgroundcolor = RGBf(0.9, 0.79, 0.78), size = (2000, 800))
     # Layout with square subplots. 
     ga = f[1, 1] = GridLayout()
     # Define axis features for left, center and right subplots.
-    axleft = Axis(ga[1, 1], ylabel = "pressure (GPa)", tellwidth = false, width = 300, 
+    axleft = Axis(ga[1, 1], ylabel = "pressure (GPa)", tellwidth = false, width = 600, 
         ylabelsize = 12, yticksize = 3, xticksize = 3, xticklabelsize = 10, yticklabelsize = 10, 
         xticklabelpad = 0.5, yticklabelpad = 0.5)
-    axcenter = Axis(ga[1, 2], xlabel = L"temperature ($\degree$C)", tellwidth = false, width = 300,
+    axcenter = Axis(ga[1, 2], xlabel = L"temperature ($\degree$C)", tellwidth = false, width = 600,
         xlabelsize = 12, xticksize = 3, xticklabelsize = 10, xticklabelpad = 0.5)
-    axright = Axis(ga[1, 3], tellwidth = false, width = 300, xticksize = 3, xticklabelsize = 10, 
+    axright = Axis(ga[1, 3], tellwidth = false, width = 600, xticksize = 3, xticklabelsize = 10, 
         xticklabelpad = 0.5)
     # Align/link axis.
     linkyaxes!(axleft, axcenter, axright)
