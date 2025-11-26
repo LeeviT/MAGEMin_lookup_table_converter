@@ -5,12 +5,20 @@
 # plotting, TidierData for filtering/manipulating data, DelimitedFiles for output.
 using DataFrames, CSV, CairoMakie, TidierData, DelimitedFiles
 
-function porosityscaling(pressure, resolution)
-    rho0 = 2500.0
+function porosityscaling(pressure, resolution, crusttype)
+    # Select the relevant parameters, depending the crustal type
+    if crusttype == "oceanic"
+        phi0 = 0.678
+        m = 0.008
+        n = 89.53
+    elseif crusttype == "continental" 
+        phi0 = 0.474
+        m = 0.071
+        n = 5.989
+    end
+    # Other parameters, assumes constant density above the calculated point for simplicity
+    rho0 = 2700.0
     g = 9.81
-    phi0 = 0.678
-    m = 0.008
-    n = 89.53
     # First, convert lithostatic pressure p=\rho*g*h to h=depth in km
     depth = (100.0 .* pressure[1:resolution:resolution^2]) / (rho0 * g)
     phi = phi0 ./ (1 .+ m .* depth) .^ n
@@ -20,9 +28,9 @@ end
 # Filename of a lookup table to process, let us assume it is located in a same folder as this 
 # processor script. Also define the output filepath, note that ASPECT reads only .txt tables.
 inputtablefolder = "."
-inputtablefilename = "pyrolite-reso66k_mtl.csv"
+inputtablefilename = "nmorb-gabbro-reso263k-p15gpa-t2000c-h20wt05_ig.csv"
 outputtablefolder = "."
-outputtablefilename = "pyrolite_mtl.txt"
+outputtablefilename = "nmorb-gabbro-h20wt05_ig.txt"
 inputtablefilepath = joinpath(inputtablefolder, inputtablefilename)
 outputtablefilepath = joinpath(outputtablefolder, outputtablefilename)
 
@@ -60,21 +68,40 @@ filtereddf = @chain filtereddf begin
 end
 
 # Find the last temperature column by column index, which has temperature < 450 °C.
-# Tlimitcoli = findlast(x -> x < -450 + 273.15, filtereddf.T[1:resolution])
-# compdensity = reshape(filtereddf.density[1:resolution] 
-#     * exp.(1e-11 * 1e5 .* filtereddf.P[1:resolution:resolution^2])', resolution, resolution)
-# for i in eachindex(filtereddf.T)
-#     Pscaling = filtereddf.P[1:resolution:resolution^2]
-#     (i >= 1 || 1 == mod(i, resolution)) && Tlimitcoli > mod(i - 1, resolution) + 1 ? 
-#     filtereddf.density[i] = compdensity[i] : 0
-# end
+Tlimitcoli = findlast(x -> x < 600 + 273.15, filtereddf.T[1:resolution])
+compdensity = reshape(filtereddf.density[1:resolution] 
+   * exp.(1e-11 * 1e5 .* filtereddf.P[1:resolution:resolution^2])', resolution, resolution)
+for i in eachindex(filtereddf.T)
+   Pscaling = filtereddf.P[1:resolution:resolution^2]
+   (i >= 1 || 1 == mod(i, resolution)) && Tlimitcoli > mod(i - 1, resolution) + 1 ? 
+   filtereddf.density[i] = compdensity[i] : 0
+end
 
-# phioceanic = porosityscaling(filtereddf.P, resolution)
-# filtereddf.density = reshape((reshape(filtereddf.density, resolution, resolution)' .* (1.0 .- phioceanic) .+ 1000.0 .* phioceanic)', resolution^2)
+phioceanic = porosityscaling(filtereddf.P, resolution, "oceanic")
+filtereddf.density = reshape((reshape(filtereddf.density, resolution, resolution)' .* (1.0 .- phioceanic) .+ 1000.0 .* phioceanic)', resolution^2)
 
 filtereddf = @chain filtereddf begin
-    @mutate(density = case_when(density < 2400.0 => 2400.0, density > 4900.0 => 4900.0, density > 0.0 => density))
+    # @mutate(density = density * 0.925)
+    @mutate(density = case_when(density < 2600 => 2600, density > 4500 => 4500, density > 0 => density))
+    # @mutate(density = density * (1.0 - 0.04 * 0.225))
 end
+
+conversionP = [3.12e4, 3.0e4] # in bars, depl. mantle, lower OC, upper OC
+conversionT = 600 + 273.15 # in kelvins
+# cutoffresolution = Int.(floor(resolution * conversionP[1] / maximum(filtereddf.P)))
+# filtereddf.density[1:cutoffresolution*resolution] = filtereddf.density[1:cutoffresolution*resolution] .- 48.0
+# Plimitcoli = [Int.(findlast(x -> x < conversionP[1], filtereddf.P[1:resolution^2])),
+#               Int.(findlast(x -> x < conversionP[2], filtereddf.P[1:resolution^2]))]
+# Tlimitcoli = findlast(x -> x < conversionT, filtereddf.T[1:resolution])
+# for i in eachindex(filtereddf.T)
+#    (i >= 1 || 1 == mod(i, resolution)) && Tlimitcoli <= mod(i - 1, resolution) + 1 && Plimitcoli[1] > i ? 
+#    filtereddf.density[i] = filtereddf.density[i] - 48.0 : 0
+# end
+# for i in eachindex(filtereddf.T)
+#    (i >= 1 || 1 == mod(i, resolution)) && Tlimitcoli > mod(i - 1, resolution) + 1 && Plimitcoli[2] > i ? 
+#    filtereddf.density[i] = filtereddf.density[i] - 48.0 : 0
+# end
+
 
 open(outputtablefilepath, "w") do io
     # Write the metadata and headers in PerpleX format.
@@ -103,12 +130,12 @@ plottingP = filtereddf.P[1:resolution:resolution^2] ./ 1e4
 # Use LaTeX font for plotting.
 with_theme(theme_latexfonts()) do
     # Define light rose-ish background color for the plots.
-    f = Figure(backgroundcolor = RGBf(0.9, 0.79, 0.78), size = (2100, 700))
+    f = Figure(backgroundcolor = :transparent, size = (2100, 700))
     # Layout with square subplots. 
     ga = f[1, 1] = GridLayout()
     # Define axis features for left, center and right subplots.
-    axleft = Axis(ga[1, 1], ylabel = "pressure (GPa)", tellwidth = false, width = 600, 
-        ylabelsize = 20, yticksize = 5, xticksize = 5, xticklabelsize = 18, yticklabelsize = 18, 
+    axleft = Axis(ga[1, 1], xlabel = L"temperature ($\degree$C)", ylabel = "pressure (GPa)", tellwidth = false, width = 600, 
+        xlabelsize = 20, ylabelsize = 20, yticksize = 5, xticksize = 5, xticklabelsize = 18, yticklabelsize = 18, 
         xticklabelpad = 0.5, yticklabelpad = 0.5)
     axcenter = Axis(ga[1, 2], xlabel = L"temperature ($\degree$C)", tellwidth = false, width = 600,
         xlabelsize = 20, xticksize = 5, xticklabelsize = 18, xticklabelpad = 0.5)
@@ -120,7 +147,7 @@ with_theme(theme_latexfonts()) do
 
     # Plot the heatmaps for each three properties.
     hmdensity = CairoMakie.heatmap!(axleft, plottingT, plottingP, 
-        reshape(filtereddf.density, resolution, resolution), colormap = Reverse(:imola))
+        reshape(filtereddf.density, resolution, resolution), colormap = Reverse(:imola10))
     hmCp = CairoMakie.heatmap!(axcenter, plottingT, plottingP, 
         reshape(filtereddf.Cp, resolution, resolution), colormap = Reverse(:glasgow))
     hmalpha = CairoMakie.heatmap!(axright, plottingT, plottingP, 
@@ -143,10 +170,15 @@ with_theme(theme_latexfonts()) do
         ticks = [round(minimum(filtereddf.alphafilt), sigdigits = 3) * 1e5, 2, 3, 4, 5,
         floor(maximum(filtereddf.alphafilt), sigdigits = 3) * 1e5])
     
+    Pline = hlines!(axleft, 2.78, 0, 1400, color = "red", linewidth = 0.5)
+    Tline = vlines!(axleft, 565, 0, 15, color = "red", linewidth = 0.5)
+
     # Bring the grid up to make it visible.
     CairoMakie.translate!(hmdensity, 0, 0, -100)
     CairoMakie.translate!(hmCp, 0, 0, -100)
     CairoMakie.translate!(hmalpha, 0, 0, -100)
+    CairoMakie.translate!(Pline, 0, 0, 100)
+    CairoMakie.translate!(Tline, 0, 0, 100)
 
     # Do some beautification of a plot.
     CairoMakie.ylims!(axright, low = 0)
