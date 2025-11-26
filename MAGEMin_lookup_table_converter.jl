@@ -5,24 +5,27 @@
 # plotting, TidierData for filtering/manipulating data, DelimitedFiles for output.
 using DataFrames, CSV, CairoMakie, TidierData, DelimitedFiles
 
-function porosityscaling(pressure, resolution, crusttype)
-    # Select the relevant parameters, depending the crustal type
+# A function which scales the density based on the near-surface porosity. Uses the empirical
+# model by Chen et al. (2020), https://doi.org/10.1007/s10040-020-02214-x.
+function porosityscaling(ρ, pressure, resolution, crusttype)
+    # Select the relevant compositional parameters, depending the crustal type
     if crusttype == "oceanic"
-        phi0 = 0.678
+        ϕ0 = 0.678
         m = 0.008
         n = 89.53
     elseif crusttype == "continental" 
-        phi0 = 0.474
+        ϕ0 = 0.474
         m = 0.071
         n = 5.989
     end
     # Other parameters, assumes constant density above the calculated point for simplicity
-    rho0 = 2700.0
+    ρ0 = 2700.0
     g = 9.81
     # First, convert lithostatic pressure p=\rho*g*h to h=depth in km
-    depth = (100.0 .* pressure[1:resolution:resolution^2]) / (rho0 * g)
-    phi = phi0 ./ (1 .+ m .* depth) .^ n
-    return phi
+    depth = (100.0 .* pressure[1:resolution:resolution^2]) / (ρ0 * g)
+    ϕ = ϕ0 ./ (1 .+ m .* depth) .^ n
+    ρ = reshape((reshape(ρ, resolution, resolution)' .* (1.0 .- ϕ) .+ 1000.0 .* ϕ)', resolution^2)
+    return ρ
 end
 
 # Filename of a lookup table to process, let us assume it is located in a same folder as this 
@@ -77,8 +80,7 @@ for i in eachindex(filtereddf.T)
    filtereddf.density[i] = compdensity[i] : 0
 end
 
-phioceanic = porosityscaling(filtereddf.P, resolution, "oceanic")
-filtereddf.density = reshape((reshape(filtereddf.density, resolution, resolution)' .* (1.0 .- phioceanic) .+ 1000.0 .* phioceanic)', resolution^2)
+filtereddf.density = porosityscaling(filtereddf.density, filtereddf.P, resolution, "oceanic")
 
 filtereddf = @chain filtereddf begin
     # @mutate(density = density * 0.925)
