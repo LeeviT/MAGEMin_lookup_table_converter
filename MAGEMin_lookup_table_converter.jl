@@ -3,7 +3,7 @@
 
 # DataFrames for better handling table format, CSV for readind in a CSV file, CairoMakie for 
 # plotting, TidierData for filtering/manipulating data, DelimitedFiles for output.
-using DataFrames, CSV, CairoMakie, TidierData, DelimitedFiles
+using DataFrames, CSV, CairoMakie, TidierData, DelimitedFiles, MAGEMin_C
 
 # A function which scales the density based on the near-surface porosity. Uses the empirical
 # model by Chen et al. (2020), https://doi.org/10.1007/s10040-020-02214-x.
@@ -28,49 +28,85 @@ function porosityscaling(ρ, pressure, resolution, crusttype)
     return ρ
 end
 
-# Filename of a lookup table to process, let us assume it is located in a same folder as this 
-# processor script. Also define the output filepath, note that ASPECT reads only .txt tables.
-inputtablefolder = "."
-inputtablefilename = "nmorb-gabbro-reso263k-p15gpa-t2000c-h20wt05_ig.csv"
+# --- Input parameters start ----
+lookuptabletype = "interface"
+
+if lookuptabletype == "file"
+    # Filename of a lookup table to process, let us assume it is located in a same folder as this 
+    # processor script.
+    inputtablefolder = "."
+    inputtablefilename = "nmorb-gabbro-reso263k-p15gpa-t2000c-h20wt05_ig.csv"
+    inputtablefilepath = joinpath(inputtablefolder, inputtablefilename)
+    # Read in a table to initialize a dataframe.
+    df = DataFrame(CSV.File(inputtablefilepath))
+elseif lookuptabletype == "interface"
+    n = 512
+    resolution = n
+    Prange = repeat(range(0.01, 50, n), outer = n)
+    Trange = repeat(range(0, 1000, n), inner = n)
+    db = Initialize_MAGEMin("ig", verbose = false)
+    # data = use_predefined_bulk_rock(db, 6)
+    Xoxides = ["SiO2"; "Al2O3"; "CaO"; "MgO"; "FeO"; "Fe2O3"; "K2O"; "Na2O"; "TiO2"; "Cr2O3"; "H2O"]
+    X = [50.03; 15.01; 11.26; 7.70; 9.73; 0.0; 0.01; 2.81; 1.52; 0.01; 1.76]
+    sys_in = "wt"
+    df = DataFrame(multi_point_minimization(Prange, Trange, db, X = X, Xoxides = Xoxides, sys_in = sys_in))
+    Finalize_MAGEMin(db)
+end
+
+# Regardless of the lookup table creation method, save it as a .txt file which is the only
+# format that ASPECT reads.
 outputtablefolder = "."
 outputtablefilename = "nmorb-gabbro-h20wt05_ig.txt"
-inputtablefilepath = joinpath(inputtablefolder, inputtablefilename)
 outputtablefilepath = joinpath(outputtablefolder, outputtablefilename)
 
-# Read in a table to initialize a dataframe.
-df = DataFrame(CSV.File(inputtablefilepath))
+# ---- Input parameters end ----
 
-# A macro to filter and modify a dataframe in MAGEMin format
-filtereddf = @chain df begin
-    # Select the relevant columns and rename them, as special characters such as square brackets are
-    # messy to handle in column names in Julia.
-    TidierData.@select(P = var"P[kbar]", T = var"T[°C]", var"phase", density = var"density[kg/m3]", 
-        Cp = var"heatCapacity[J/K]", alpha = var"alpha[1/K]", enthalpy = var"Enthalpy[J]", 
-        Vp = var"Vp[km/s]", Vs = var"Vs[km/s]")
-    # Filter out data of individual minerals and preserve bulk rock (=system) composition data.
-    @filter(phase == "system")
-    # Convert subzero (=unphysical) heat expansivity values to zero.
-    @mutate(alphafilt = case_when(alpha < 0.0 => 0.0, alpha > 0.75e-4 => 0.75e-4, alpha > 0.0 => alpha))
-    # Convert pressure from kbar to bar and temperature from celsius to kelvin. 
-    @mutate(P = 1e3 * P, T = 273.15 + T)
-    # Drop the 'phase' column and reorder the columns for PerpleX format.
-    TidierData.@select(T, P, density, alphafilt, Cp, Vp, Vs, enthalpy)
-    @arrange(P, T)
+if lookuptabletype == "file"
+    # A macro to filter and modify a dataframe in MAGEMin format
+    filtereddf = @chain df begin
+        # Select the relevant columns and rename them, as special characters such as square brackets are
+        # messy to handle in column names in Julia.
+        TidierData.@select(P = var"P[kbar]", T = var"T[°C]", var"phase", density = var"density[kg/m3]", 
+            Cp = var"heatCapacity[J/K]", alpha = var"alpha[1/K]", enthalpy = var"Enthalpy[J]", 
+            Vp = var"Vp[km/s]", Vs = var"Vs[km/s]")
+        # Filter out data of individual minerals and preserve bulk rock (=system) composition data.
+        @filter(phase == "system")
+        # Convert pressure from kbar to bar and temperature from celsius to kelvin. 
+        @mutate(P = 1e3 * P, T = 273.15 + T)
+        # Drop the 'phase' column and reorder the columns for PerpleX format.
+        TidierData.@select(T, P, density, alphafilt, Cp, Vp, Vs, enthalpy)
+        @arrange(P, T)
+    end
+
+    # Resolution of the lookup table
+    resolution = Int.(sqrt(length(filtereddf.T)))
+
+    # Remove the square brackets from the heat capacity column, and convert it from string to float.
+    filtereddf.Cp = strip.(filtereddf.Cp, '[')
+    filtereddf.Cp = strip.(filtereddf.Cp, ']')
+    filtereddf.Cp = parse.(Float64, filtereddf.Cp)
+elseif lookuptabletype == "interface"
+    # A macro to filter and modify a dataframe in MAGEMin format
+    filtereddf = @chain df begin
+        # Select the relevant columns and rename them, as special characters such as square brackets are
+        # messy to handle in column names in Julia.
+        TidierData.@select(P = var"P_kbar", T = var"T_C", density = var"rho", Cp = var"s_cp", 
+            alpha = var"alpha", enthalpy = var"enthalpy", Vp = var"Vp", Vs = var"Vs", bulk_S_wt = var"bulk_S_wt")
+        # Convert pressure from kbar to bar and temperature from celsius to kelvin. 
+        @mutate(P = 1e3 * P, T = 273.15 + T)
+        # Drop the 'phase' column and reorder the columns for PerpleX format.
+        TidierData.@select(T, P, density, alpha, Cp, Vp, Vs, enthalpy, bulk_S_wt)
+        @arrange(P, T)
+        # Rename the column for later use.
+        @rename(H20minebound = bulk_S_wt)
+    end
+    # Convert from array[array] to array
+    for (col, idx) in [(:H20minebound, 11), (:alpha, 1), (:Cp, 1), (:enthalpy, 1)]
+        filtereddf[!, col] = getindex.(filtereddf[!, col], idx)
+    end
 end
 
-# Resolution of the lookup table
-resolution = Int.(sqrt(length(filtereddf.T)))
-
-# Remove the square brackets from the heat capacity column, and convert it from string to float.
-filtereddf.Cp = strip.(filtereddf.Cp, '[')
-filtereddf.Cp = strip.(filtereddf.Cp, ']')
-filtereddf.Cp = parse.(Float64, filtereddf.Cp)
-
-filtereddf = @chain filtereddf begin
-    @mutate(Cp = case_when(Cp < 750.0 => 750.0, Cp > 1500.0 => 1500.0, Cp > 0.0 => Cp))
-end
-
-# Find the last temperature column by column index, which has temperature < 450 °C.
+#= Find the last temperature column by column index, which has temperature < 450 °C.
 Tlimitcoli = findlast(x -> x < 600 + 273.15, filtereddf.T[1:resolution])
 compdensity = reshape(filtereddf.density[1:resolution] 
    * exp.(1e-11 * 1e5 .* filtereddf.P[1:resolution:resolution^2])', resolution, resolution)
@@ -78,12 +114,15 @@ for i in eachindex(filtereddf.T)
    Pscaling = filtereddf.P[1:resolution:resolution^2]
    (i >= 1 || 1 == mod(i, resolution)) && Tlimitcoli > mod(i - 1, resolution) + 1 ? 
    filtereddf.density[i] = compdensity[i] : 0
-end
+=#
 
-filtereddf.density = porosityscaling(filtereddf.density, filtereddf.P, resolution, "oceanic")
+# filtereddf.density = porosityscaling(filtereddf.density, filtereddf.P, resolution, "oceanic")
 
 filtereddf = @chain filtereddf begin
-    # @mutate(density = density * 0.925)
+    # Convert subzero (=unphysical) heat expansivity and specific heat values to zero.
+    @mutate(alphafilt = case_when(alpha < 0.0 => 0.0, alpha > 0.75e-4 => 0.75e-4, alpha > 0.0 => alpha))
+    @mutate(Cp = case_when(Cp < 750.0 => 750.0, Cp > 1500.0 => 1500.0, Cp > 0.0 => Cp))
+    # Filter outlier density values for better stability of a geodynamic model.
     @mutate(density = case_when(density < 2600 => 2600, density > 4500 => 4500, density > 0 => density))
     # @mutate(density = density * (1.0 - 0.04 * 0.225))
 end
@@ -105,7 +144,7 @@ conversionT = 600 + 273.15 # in kelvins
 # end
 
 
-open(outputtablefilepath, "w") do io
+#= open(outputtablefilepath, "w") do io
     # Write the metadata and headers in PerpleX format.
     write(io, 
         "|6.6.6\n"                                                  # PerpleX version
@@ -123,7 +162,7 @@ open(outputtablefilepath, "w") do io
         * "T(K)\tP(bar)\trho,kg/m3\talpha,1/K\tcp,J/K/kg\tvp,km/s\tvs,km/s\th,J/kg\n") # Column names and units
     # Write the actual phase diagram data.
     writedlm(io, eachrow(filtereddf), '\t')
-end
+end =# 
 
 # Arrays for plotting in celcius degrees and gigapascals.
 plottingT = filtereddf.T[1:resolution] .- 273.15
@@ -152,8 +191,10 @@ with_theme(theme_latexfonts()) do
         reshape(filtereddf.density, resolution, resolution), colormap = Reverse(:imola10))
     hmCp = CairoMakie.heatmap!(axcenter, plottingT, plottingP, 
         reshape(filtereddf.Cp, resolution, resolution), colormap = Reverse(:glasgow))
-    hmalpha = CairoMakie.heatmap!(axright, plottingT, plottingP, 
-        reshape(filtereddf.alphafilt, resolution, resolution) .* 1e5, colormap = Reverse(:nuuk)) 
+    #= hmalpha = CairoMakie.heatmap!(axright, plottingT, plottingP, 
+        reshape(filtereddf.alphafilt, resolution, resolution) .* 1e5, colormap = Reverse(:nuuk)) =#
+    hmH2Owt = CairoMakie.heatmap!(axright, plottingT, plottingP, 
+        reshape(filtereddf.H20minebound .* 100, resolution, resolution), colormap = Reverse(:nuuk))
     # Create the colorbars for heatmaps.
     cbdensity = Colorbar(ga[0, 1][1, 1], hmdensity, label = L"density (kg/m$^3$)", vertical = false, 
         tellwidth = false, width = 350, spinewidth = 0.1, labelpadding = 1.5, labelsize = 16, 
@@ -166,19 +207,24 @@ with_theme(theme_latexfonts()) do
         tellwidth = false, width = 350, spinewidth = 0.1, labelpadding = 1.5, labelsize = 16, 
         ticklabelpad = 0.5, ticklabelsize = 14, ticksize = 3.5, ticks = [750, 1000, 1250, 1500, 
         floor(maximum(filtereddf.Cp), sigdigits = 4)])
-    cbalpha = Colorbar(ga[0, 3][1, 1], hmalpha, label = L"thermal expansivity ($10^{-5}/\degree$C)",
+    #= cbalpha = Colorbar(ga[0, 3][1, 1], hmalpha, label = L"thermal expansivity ($10^{-5}/\degree$C)",
         vertical = false, tellwidth = false, width = 350, spinewidth = 0.1, labelpadding = 1.5, 
         labelsize = 16, ticklabelpad = 0.5, ticklabelsize = 14, ticksize = 3.5,
         ticks = [round(minimum(filtereddf.alphafilt), sigdigits = 3) * 1e5, 2, 3, 4, 5,
-        floor(maximum(filtereddf.alphafilt), sigdigits = 3) * 1e5])
-    
+        floor(maximum(filtereddf.alphafilt), sigdigits = 3) * 1e5]) =#
+    cbwtH2O = Colorbar(ga[0, 3][1, 1], hmH2Owt, label = "bound water (wt. %)",
+        vertical = false, tellwidth = false, width = 350, spinewidth = 0.1, labelpadding = 1.5, 
+        labelsize = 16, ticklabelpad = 0.5, ticklabelsize = 14, ticksize = 3.5,
+        ticks = [0, 0.5, 1.0, 1.5, 2.0, 100])
+
     Pline = hlines!(axleft, 2.78, 0, 1400, color = "red", linewidth = 0.5)
     Tline = vlines!(axleft, 565, 0, 15, color = "red", linewidth = 0.5)
 
     # Bring the grid up to make it visible.
     CairoMakie.translate!(hmdensity, 0, 0, -100)
     CairoMakie.translate!(hmCp, 0, 0, -100)
-    CairoMakie.translate!(hmalpha, 0, 0, -100)
+    # CairoMakie.translate!(hmalpha, 0, 0, -100)
+    CairoMakie.translate!(hmH2Owt, 0, 0, -100)
     CairoMakie.translate!(Pline, 0, 0, 100)
     CairoMakie.translate!(Tline, 0, 0, 100)
 
