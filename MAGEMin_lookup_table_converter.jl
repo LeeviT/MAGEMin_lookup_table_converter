@@ -8,7 +8,7 @@ using DataFrames, CSV, CairoMakie, TidierData, DelimitedFiles, MAGEMin_C
 # A function which scales the density based on the near-surface porosity. Uses the empirical
 # model by Chen et al. (2020), https://doi.org/10.1007/s10040-020-02214-x.
 function porosityscaling(ρ, pressure, resolution, crusttype)
-    # Select the relevant compositional parameters, depending the crustal type
+    # Select the relevant compositional parameters, depending the crustal type.
     if crusttype == "oceanic"
         ϕ0 = 0.678
         m = 0.008
@@ -18,10 +18,10 @@ function porosityscaling(ρ, pressure, resolution, crusttype)
         m = 0.071
         n = 5.989
     end
-    # Other parameters, assumes constant density above the calculated point for simplicity
+    # Other parameters, assumes constant density above the calculated point for simplicity.
     ρ0 = 2700.0
     g = 9.81
-    # First, convert lithostatic pressure p=\rho*g*h to h=depth in km
+    # First, convert lithostatic pressure p=\rho*g*h to h=depth in km.
     depth = (100.0 .* pressure[1:resolution:resolution^2]) / (ρ0 * g)
     ϕ = ϕ0 ./ (1 .+ m .* depth) .^ n
     ρ = reshape((reshape(ρ, resolution, resolution)' .* (1.0 .- ϕ) .+ 1000.0 .* ϕ)', resolution^2)
