@@ -40,23 +40,26 @@ if lookuptabletype == "file"
     # Read in a table to initialize a dataframe.
     df = DataFrame(CSV.File(inputtablefilepath))
 elseif lookuptabletype == "interface"
-    n = 512
+    n = 256
     resolution = n
-    Prange = repeat(range(0.01, 50, n), outer = n)
-    Trange = repeat(range(0, 1000, n), inner = n)
+    Prange = repeat(range(0.01, 150, n), outer = n)
+    Trange = repeat(range(0, 1700, n), inner = n)
     db = Initialize_MAGEMin("ig", verbose = false)
-    # data = use_predefined_bulk_rock(db, 6)
-    Xoxides = ["SiO2"; "Al2O3"; "CaO"; "MgO"; "FeO"; "Fe2O3"; "K2O"; "Na2O"; "TiO2"; "Cr2O3"; "H2O"]
-    X = [50.03; 15.01; 11.26; 7.70; 9.73; 0.0; 0.01; 2.81; 1.52; 0.01; 1.76]
+    # data = use_predefined_bulk_rock(db, 4)
+    Xoxides = ["SiO2"; "Al2O3"; "CaO"; "MgO"; "FeO"; "Fe2O3"; "K2O"; "Na2O"; "TiO2"; "Cr2O3"; "H2O"] # Stoner et al. composition
+    X = [50.03; 15.01; 11.26; 7.70; 9.73; 0.0; 0.01; 2.81; 1.52; 0.01; 0.5] # Stoner et al. composition
+    # Xoxides = ["SiO2"; "Al2O3"; "CaO"; "MgO"; "FeO"; "K2O"; "Na2O"; "TiO2"; "O"; "MnO"; "H2O"] garnet-migmatite
+    # X = [69.66; 13.76; 1.77; 1.73; 4.32; 2.61; 2.41; 0.8; 0.03; 0.07; 2.82] garnet-migmatite
     sys_in = "wt"
     df = DataFrame(multi_point_minimization(Prange, Trange, db, X = X, Xoxides = Xoxides, sys_in = sys_in))
+    # df = DataFrame(multi_point_minimization(Prange, Trange, db, test = 4))
     Finalize_MAGEMin(db)
 end
 
 # Regardless of the lookup table creation method, save it as a .txt file which is the only
 # format that ASPECT reads.
 outputtablefolder = "."
-outputtablefilename = "nmorb-gabbro-h20wt05_ig.txt"
+outputtablefilename = "nmorb-gabbro-h20wt05-delay_ig.txt"
 outputtablefilepath = joinpath(outputtablefolder, outputtablefilename)
 
 # ---- Input parameters end ----
@@ -77,10 +80,8 @@ if lookuptabletype == "file"
         TidierData.@select(T, P, density, alphafilt, Cp, Vp, Vs, enthalpy)
         @arrange(P, T)
     end
-
     # Resolution of the lookup table
     resolution = Int.(sqrt(length(filtereddf.T)))
-
     # Remove the square brackets from the heat capacity column, and convert it from string to float.
     filtereddf.Cp = strip.(filtereddf.Cp, '[')
     filtereddf.Cp = strip.(filtereddf.Cp, ']')
@@ -115,13 +116,26 @@ for i in eachindex(filtereddf.T)
    (i >= 1 || 1 == mod(i, resolution)) && Tlimitcoli > mod(i - 1, resolution) + 1 ? 
    filtereddf.density[i] = compdensity[i] : 0
 =#
-
-# filtereddf.density = porosityscaling(filtereddf.density, filtereddf.P, resolution, "oceanic")
+scalingfactor = ones(resolution)
+for i in range(1, resolution)
+    if filtereddf.T[i] < 600 + 273.15
+        scalingfactor[i] = 0
+    elseif filtereddf.T[i] >= 600 + 273.15 && filtereddf.T[i] < 900 + 273.15
+        # println(filtereddf.T[i] - 273.15)
+        scalingfactor[i] = ((filtereddf.T[i] - (600 + 273.15)) / 300)^3
+    else
+        scalingfactor[i] = 1
+    end
+end
+filtereddf.scalingfactor = repeat(scalingfactor, outer = resolution)
+filtereddf.density = porosityscaling(filtereddf.density, filtereddf.P, resolution, "oceanic")
 
 filtereddf = @chain filtereddf begin
     # Convert subzero (=unphysical) heat expansivity and specific heat values to zero.
     @mutate(alphafilt = case_when(alpha < 0.0 => 0.0, alpha > 0.75e-4 => 0.75e-4, alpha > 0.0 => alpha))
     @mutate(Cp = case_when(Cp < 750.0 => 750.0, Cp > 1500.0 => 1500.0, Cp > 0.0 => Cp))
+    # Apply kinetic delay scaling to density values.
+    @mutate(density = 3000 * (1.0 - scalingfactor) + density .* scalingfactor)
     # Filter outlier density values for better stability of a geodynamic model.
     @mutate(density = case_when(density < 2600 => 2600, density > 4500 => 4500, density > 0 => density))
     # @mutate(density = density * (1.0 - 0.04 * 0.225))
@@ -144,7 +158,7 @@ conversionT = 600 + 273.15 # in kelvins
 # end
 
 
-#= open(outputtablefilepath, "w") do io
+open(outputtablefilepath, "w") do io
     # Write the metadata and headers in PerpleX format.
     write(io, 
         "|6.6.6\n"                                                  # PerpleX version
@@ -162,7 +176,7 @@ conversionT = 600 + 273.15 # in kelvins
         * "T(K)\tP(bar)\trho,kg/m3\talpha,1/K\tcp,J/K/kg\tvp,km/s\tvs,km/s\th,J/kg\n") # Column names and units
     # Write the actual phase diagram data.
     writedlm(io, eachrow(filtereddf), '\t')
-end =# 
+end
 
 # Arrays for plotting in celcius degrees and gigapascals.
 plottingT = filtereddf.T[1:resolution] .- 273.15
@@ -189,8 +203,10 @@ with_theme(theme_latexfonts()) do
     # Plot the heatmaps for each three properties.
     hmdensity = CairoMakie.heatmap!(axleft, plottingT, plottingP, 
         reshape(filtereddf.density, resolution, resolution), colormap = Reverse(:imola10))
-    hmCp = CairoMakie.heatmap!(axcenter, plottingT, plottingP, 
-        reshape(filtereddf.Cp, resolution, resolution), colormap = Reverse(:glasgow))
+    #= hmCp = CairoMakie.heatmap!(axcenter, plottingT, plottingP, 
+        reshape(filtereddf.Cp, resolution, resolution), colormap = Reverse(:glasgow)) =#
+    hmscaling = CairoMakie.heatmap!(axcenter, plottingT, plottingP, 
+        reshape(filtereddf.scalingfactor, resolution, resolution), colormap = Reverse(:glasgow))
     #= hmalpha = CairoMakie.heatmap!(axright, plottingT, plottingP, 
         reshape(filtereddf.alphafilt, resolution, resolution) .* 1e5, colormap = Reverse(:nuuk)) =#
     hmH2Owt = CairoMakie.heatmap!(axright, plottingT, plottingP, 
@@ -203,10 +219,13 @@ with_theme(theme_latexfonts()) do
         floor(maximum(filtereddf.density), sigdigits = 4)],
         minorticks = [2250, 2750, 3250, 3750, 4250], minorticksvisible = true, minorticksize = 2.5, 
         minortickwidth = 0.75)
-    cbCp = Colorbar(ga[0, 2][1, 1], hmCp, label = L"heat capacity (J/$\degree$C)", vertical = false, 
+    #= cbCp = Colorbar(ga[0, 2][1, 1], hmCp, label = L"heat capacity (J/$\degree$C)", vertical = false, 
         tellwidth = false, width = 350, spinewidth = 0.1, labelpadding = 1.5, labelsize = 16, 
         ticklabelpad = 0.5, ticklabelsize = 14, ticksize = 3.5, ticks = [750, 1000, 1250, 1500, 
-        floor(maximum(filtereddf.Cp), sigdigits = 4)])
+        floor(maximum(filtereddf.Cp), sigdigits = 4)]) =#
+    cbCp = Colorbar(ga[0, 2][1, 1], hmscaling, label = "scaling factor", vertical = false, 
+        tellwidth = false, width = 350, spinewidth = 0.1, labelpadding = 1.5, labelsize = 16, 
+        ticklabelpad = 0.5, ticklabelsize = 14, ticksize = 3.5, ticks = [0.0, 0.25, 0.5, 0.75, 1.0])
     #= cbalpha = Colorbar(ga[0, 3][1, 1], hmalpha, label = L"thermal expansivity ($10^{-5}/\degree$C)",
         vertical = false, tellwidth = false, width = 350, spinewidth = 0.1, labelpadding = 1.5, 
         labelsize = 16, ticklabelpad = 0.5, ticklabelsize = 14, ticksize = 3.5,
@@ -215,18 +234,19 @@ with_theme(theme_latexfonts()) do
     cbwtH2O = Colorbar(ga[0, 3][1, 1], hmH2Owt, label = "bound water (wt. %)",
         vertical = false, tellwidth = false, width = 350, spinewidth = 0.1, labelpadding = 1.5, 
         labelsize = 16, ticklabelpad = 0.5, ticklabelsize = 14, ticksize = 3.5,
-        ticks = [0, 0.5, 1.0, 1.5, 2.0, 100])
+        ticks = [0, 0.5, 1.0, 1.5, 2.0, 2.5])
 
-    Pline = hlines!(axleft, 2.78, 0, 1400, color = "red", linewidth = 0.5)
-    Tline = vlines!(axleft, 565, 0, 15, color = "red", linewidth = 0.5)
+    # Pline = hlines!(axleft, 2.78, 0, 1400, color = "red", linewidth = 0.5)
+    # Tline = vlines!(axleft, 565, 0, 15, color = "red", linewidth = 0.5)
 
     # Bring the grid up to make it visible.
     CairoMakie.translate!(hmdensity, 0, 0, -100)
-    CairoMakie.translate!(hmCp, 0, 0, -100)
+    CairoMakie.translate!(hmscaling, 0, 0, -100)
+    # CairoMakie.translate!(hmCp, 0, 0, -100)
     # CairoMakie.translate!(hmalpha, 0, 0, -100)
     CairoMakie.translate!(hmH2Owt, 0, 0, -100)
-    CairoMakie.translate!(Pline, 0, 0, 100)
-    CairoMakie.translate!(Tline, 0, 0, 100)
+    # CairoMakie.translate!(Pline, 0, 0, 100)
+    # CairoMakie.translate!(Tline, 0, 0, 100)
 
     # Do some beautification of a plot.
     CairoMakie.ylims!(axright, low = 0)
