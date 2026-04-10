@@ -63,11 +63,11 @@ function generate_dataframe(lookuptabletype, database)
     Prange = repeat(range(0.01, 300, n), outer = n)
     Trange = repeat(range(0, 1800, n), inner = n)
     db = Initialize_MAGEMin(database, verbose = false)
-    Xoxides = ["SiO2";    "Al2O3";   "CaO";     "MgO";     "FeO";    "Na2O"] # mantle oxides
-    X =       [45.219696; 4.31225;   3.364569;  38.997326; 8.065189; 0.011995] # pyrolite
-    # Xoxides = ["SiO2";    "Al2O3";   "CaO";     "MgO";    "FeO";    "K2O";    "Na2O";   "TiO2";   "O";     "Cr2O3";  "H2O"] # OC oxides
+    # Xoxides = ["SiO2";    "Al2O3";   "CaO";     "MgO";     "FeO";    "Na2O"] # mantle oxides
+    # X =       [45.219696; 4.31225;   3.364569;  38.997326; 8.065189; 0.011995] # pyrolite
+    Xoxides = ["SiO2";    "Al2O3";   "CaO";     "MgO";    "FeO";    "K2O";    "Na2O";   "TiO2";   "O";     "Cr2O3";  "H2O"] # OC oxides
     # X =       [50.992811; 15.304009; 10.922183; 7.848858; 9.913537; 0.135232; 2.867050; 1.541733; 0.176099; 0.048487; 0.25] # gabbro
-    # X =       [50.376296; 15.118980; 10.790131; 7.753963; 9.793680; 0.133597; 2.832387; 1.523093; 0.17397; 0.047901; 1.456] # basalt
+    X =       [50.376296; 15.118980; 10.790131; 7.753963; 9.793680; 0.133597; 2.832387; 1.523093; 0.17397; 0.047901; 1.456] # basalt
     # Xoxides = ["SiO2"; "Al2O3"; "CaO"; "MgO"; "FeO"; "K2O"; "Na2O"; "TiO2"; "O"; "MnO"; "H2O"] # garnet-migmatite
     # X = [69.66; 13.76; 1.77; 1.73; 4.32; 2.61; 2.41; 0.8; 0.03; 0.07; 2.82] # garnet-migmatite
     # X = [64.84; 14.99; 3.50; 2.41; 4.90; 2.72; 3.18; 0.62; 0.0; 0.1; 2.71] # average upper continental crust
