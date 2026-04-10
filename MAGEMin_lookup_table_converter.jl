@@ -96,7 +96,7 @@ end
 
 # Flow law plot value mapping for "ig" labels.
 const FLOW_LAW_PLOT_MAP_IG = Dict(
-    "none" => 1.0, "blueschist" => 2.0, "eclogite" => 3.0, "greenschist" => 4.0, ">15% melt" => 5.0
+    "blueschist" => 1.0, "eclogite" => 2.0, "greenschist" => 3.0, ">15% melt" => 4.0
 )
 
 """Classify the flow law regime for the igneous database from weight fractions and temperature.
@@ -112,7 +112,7 @@ function classify_flow_law_ig(blueschist_wt, greenschist_wt, eclogite_wt, liq_wt
     elseif eclogite_wt > 0.5 || (eclogite_wt > blueschist_wt && eclogite_wt > greenschist_wt)
         "eclogite"
     elseif (blueschist_wt + greenschist_wt) == 0.0
-        "none"
+        "blueschist"
     elseif blueschist_wt >= greenschist_wt
         "blueschist"
     else
@@ -138,8 +138,8 @@ function classify_flow_law_ig(blueschist_wt, greenschist_wt, eclogite_wt, liq_wt
         (0.0, 0.0, 0.0, 1.0)
     elseif label == "blueschist"
         (1.0, 0.0, 0.0, 0.0)
-    else
-        (0.0, 0.0, 0.0, 0.0)
+    else  # blueschist fallback
+        (1.0, 0.0, 0.0, 0.0)
     end
 
     return label, plot_val, indices
@@ -184,13 +184,13 @@ function classify_flow_law_mtl(ol_wt, ring_wad_wt, bm_fp_wt)
 end
 
 """Convert a phase-fraction tuple into a single dominant phase index (1-based).
-For mtl with label \"none\", defaults to bridgmanite+fp (index 3)."""
+For mtl, defaults to bridgmanite+fp (index 3). For ig, defaults to blueschist (index 1)."""
 function dominant_index_from_tuple(indices, database, label)
     # Find the index of the maximum fraction; use only first 3 for mtl (4th is unused)
     n = database == "mtl" ? 3 : 4
     # If all zero (no stable phases), default to bridgmanite+fp for mtl
     if all(indices[1:n] .== 0.0)
-        return database == "mtl" ? 3.0 : 0.0
+        return database == "mtl" ? 3.0 : 1.0
     end
     idx = argmax(indices[1:n])
     return Float64(idx)
@@ -213,11 +213,11 @@ function compute_phase_fractions!(df, database)
 
         # No stable phases at this P-T point — keep zero/default values.
         if isempty(ph)
-            dominant_phase[i] = database == "mtl" ? "bridgmanite+fp" : "none"
-            second_dominant_phase[i] = database == "mtl" ? "bridgmanite+fp" : "none"
-            flow_law_col[i] = database == "mtl" ? "bridgmanite+fp" : "none"
+            dominant_phase[i] = database == "mtl" ? "bridgmanite+fp" : "blueschist"
+            second_dominant_phase[i] = database == "mtl" ? "bridgmanite+fp" : "blueschist"
+            flow_law_col[i] = database == "mtl" ? "bridgmanite+fp" : "blueschist"
             flow_law_plot_col[i] = database == "mtl" ? 3.0 : 1.0
-            dominant_phase_idx[i] = database == "mtl" ? 3.0 : 0.0
+            dominant_phase_idx[i] = database == "mtl" ? 3.0 : 1.0
             continue
         end
 
@@ -462,9 +462,9 @@ second_dominant_phase_num, unique_phases2, n_phases2 = phase_to_numeric(filtered
 
 # Continuous plotting scale for flow_law, database-dependent.
 if database == "ig"
-    flow_law_ticks = ([1.0, 2.0, 3.0, 4.0, 5.0], ["1: none", "2: blueschist", "3: eclogite", "4: greenschist", "5: >15% melt"])
-    flowlaw_cmap = cgrad([:grey85, :royalblue3, :firebrick3, :darkolivegreen3, :darkorange2], 5, categorical = true)
-    flowlaw_colorrange = (0.5, 5.5)
+    flow_law_ticks = ([1.0, 2.0, 3.0, 4.0], ["1: blueschist", "2: eclogite", "3: greenschist", "4: >15% melt"])
+    flowlaw_cmap = cgrad([:royalblue3, :firebrick3, :darkolivegreen3, :darkorange2], 4, categorical = true)
+    flowlaw_colorrange = (0.5, 4.5)
 elseif database == "mtl"
     flow_law_ticks = ([1.0, 2.0, 3.0], ["1: olivine", "2: ring/wad", "3: bridgmanite+fp"])
     flowlaw_cmap = cgrad([:forestgreen, :darkorange2, :mediumpurple3], 3, categorical = true)
