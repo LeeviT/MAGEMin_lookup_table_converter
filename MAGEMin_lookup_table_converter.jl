@@ -58,7 +58,7 @@ function generate_dataframe(lookuptabletype, database)
         return df, resolution
     end
     # lookuptabletype == "interface"
-    n = 256
+    n = 64
     resolution = n
     Prange = repeat(range(0.01, 300, n), outer = n)
     Trange = repeat(range(0, 1800, n), inner = n)
@@ -94,13 +94,15 @@ end
 
 # ── Flow law classification for "ig" (igneous) database ──
 
-# Flow law plot value mapping for non-eclogite labels.
+# Flow law plot value mapping for "ig" labels.
 const FLOW_LAW_PLOT_MAP_IG = Dict(
-    "none" => 1.0, "blueschist" => 2.0, "greenschist" => 4.0, ">15% melt" => 5.0
+    "none" => 1.0, "blueschist" => 2.0, "eclogite" => 3.0, "greenschist" => 4.0, ">15% melt" => 5.0
 )
 
 """Classify the flow law regime for the igneous database from weight fractions and temperature.
-Returns (label, plot_value, phase_indices)."""
+Returns (label, plot_value, phase_indices).
+The blueschist→eclogite transition is discrete: eclogite is assigned only when
+the kinetic-delay scaling reaches ≥ 0.5; below that it stays blueschist."""
 function classify_flow_law_ig(blueschist_wt, greenschist_wt, eclogite_wt, liq_wt, T_C)
     scaling = kinetic_delay_scaling(273.15 + T_C)
 
@@ -117,19 +119,19 @@ function classify_flow_law_ig(blueschist_wt, greenschist_wt, eclogite_wt, liq_wt
         "greenschist"
     end
 
-    # Step 2: apply kinetic delay to eclogite transition
+    # Step 2: apply discrete kinetic delay to eclogite transition (threshold at 0.5)
     label = if raw == "eclogite"
-        scaling == 0.0 ? "blueschist" : scaling == 1.0 ? "eclogite" : "blueschist-eclogite transition"
+        scaling >= 0.5 ? "eclogite" : "blueschist"
     else
         raw
     end
 
-    # Step 3: plot value (eclogite uses continuous 2.0–3.0 scale)
-    plot_val = raw == "eclogite" ? 2.0 + scaling : FLOW_LAW_PLOT_MAP_IG[label]
+    # Step 3: plot value (all categorical, no continuous scaling)
+    plot_val = FLOW_LAW_PLOT_MAP_IG[label]
 
     # Step 4: phase indices (blueschist, greenschist, eclogite, melt)
-    indices = if raw == "eclogite"
-        (1.0 - scaling, 0.0, scaling, 0.0)
+    indices = if label == "eclogite"
+        (0.0, 0.0, 1.0, 0.0)
     elseif label == "greenschist"
         (0.0, 1.0, 0.0, 0.0)
     elseif label == ">15% melt"
@@ -460,13 +462,13 @@ second_dominant_phase_num, unique_phases2, n_phases2 = phase_to_numeric(filtered
 
 # Continuous plotting scale for flow_law, database-dependent.
 if database == "ig"
-    flow_law_ticks = ([1.0, 2.0, 3.0, 4.0, 5.0], ["none", "blueschist", "eclogite", "greenschist", ">15% melt"])
-    flowlaw_cmap = cgrad([:grey85, :royalblue3, :firebrick3, :darkolivegreen3, :darkorange2])
-    flowlaw_colorrange = (1.0, 5.0)
+    flow_law_ticks = ([1.0, 2.0, 3.0, 4.0, 5.0], ["1: none", "2: blueschist", "3: eclogite", "4: greenschist", "5: >15% melt"])
+    flowlaw_cmap = cgrad([:grey85, :royalblue3, :firebrick3, :darkolivegreen3, :darkorange2], 5, categorical = true)
+    flowlaw_colorrange = (0.5, 5.5)
 elseif database == "mtl"
-    flow_law_ticks = ([1.0, 2.0, 3.0], ["olivine", "ring/wad", "bridgmanite+fp"])
-    flowlaw_cmap = cgrad([:forestgreen, :darkorange2, :mediumpurple3])
-    flowlaw_colorrange = (1.0, 3.0)
+    flow_law_ticks = ([1.0, 2.0, 3.0], ["1: olivine", "2: ring/wad", "3: bridgmanite+fp"])
+    flowlaw_cmap = cgrad([:forestgreen, :darkorange2, :mediumpurple3], 3, categorical = true)
+    flowlaw_colorrange = (0.5, 3.5)
 end
 
 # Use LaTeX font for plotting.
