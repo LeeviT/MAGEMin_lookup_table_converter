@@ -41,7 +41,7 @@ end
 
 # --- Input parameters start ----
 lookuptabletype = "interface"
-database = "mtl"  # "ig" for igneous, "mtl" for mantle
+database = "ig"  # "ig" for igneous, "mtl" for mantle
 usescaling = true
 outputtablefolder = "."
 outputtablefilename = "3200kgm3_mtl.txt"
@@ -58,7 +58,7 @@ function generate_dataframe(lookuptabletype, database)
         return df, resolution
     end
     # lookuptabletype == "interface"
-    n = 64
+    n = 512
     resolution = n
     Prange = repeat(range(0.01, 300, n), outer = n)
     Trange = repeat(range(0, 1800, n), inner = n)
@@ -75,6 +75,30 @@ function generate_dataframe(lookuptabletype, database)
     df = DataFrame(multi_point_minimization(Prange, Trange, db, X = X, Xoxides = Xoxides, sys_in = sys_in)) # For user-specified bulk composition
     Finalize_MAGEMin(db)
     return df, resolution
+end
+
+"""Forward-fill NaN values in every AbstractFloat column of a DataFrame.
+If the very first element is NaN, it is back-filled with the next non-NaN value."""
+function nanfill!(df::DataFrame)
+    for col in names(df)
+        v = df[!, col]
+        eltype(v) <: AbstractFloat || continue
+        # Back-fill leading NaNs with the first non-NaN value.
+        first_valid = findfirst(!isnan, v)
+        if first_valid !== nothing && first_valid > 1
+            v[1:first_valid-1] .= v[first_valid]
+        end
+        # Forward-fill remaining NaNs.
+        prev = NaN
+        for i in eachindex(v)
+            if isnan(v[i])
+                isnan(prev) || (v[i] = prev)
+            else
+                prev = v[i]
+            end
+        end
+    end
+    return df
 end
 
 """Helper: safely get a fraction from a vector by index, returning 0.0 if index is nothing."""
@@ -95,8 +119,13 @@ end
 # ── Flow law classification for "ig" (igneous) database ──
 
 # Flow law plot value mapping for "ig" labels.
+# Output file index mapping: blueschist=1, greenschist=2, eclogite=3, >15% melt=2
+const FLOW_LAW_OUTPUT_MAP_IG = Dict(
+    "blueschist" => 1.0, "greenschist" => 2.0, "eclogite" => 3.0, ">15% melt" => 2.0
+)
+# Visualization plot values (distinct for coloring): blueschist=1, greenschist=2, eclogite=3, >15% melt=4
 const FLOW_LAW_PLOT_MAP_IG = Dict(
-    "blueschist" => 1.0, "eclogite" => 2.0, "greenschist" => 3.0, ">15% melt" => 4.0
+    "blueschist" => 1.0, "greenschist" => 2.0, "eclogite" => 3.0, ">15% melt" => 4.0
 )
 
 """Classify the flow law regime for the igneous database from weight fractions and temperature.
@@ -186,14 +215,15 @@ end
 """Convert a phase-fraction tuple into a single dominant phase index (1-based).
 For mtl, defaults to bridgmanite+fp (index 3). For ig, defaults to blueschist (index 1)."""
 function dominant_index_from_tuple(indices, database, label)
-    # Find the index of the maximum fraction; use only first 3 for mtl (4th is unused)
-    n = database == "mtl" ? 3 : 4
-    # If all zero (no stable phases), default to bridgmanite+fp for mtl
-    if all(indices[1:n] .== 0.0)
-        return database == "mtl" ? 3.0 : 1.0
+    if database == "ig"
+        return FLOW_LAW_OUTPUT_MAP_IG[label]
+    else
+        # mtl: find the index of the maximum fraction (first 3 only)
+        if all(indices[1:3] .== 0.0)
+            return 3.0  # default to bridgmanite+fp
+        end
+        return Float64(argmax(indices[1:3]))
     end
-    idx = argmax(indices[1:n])
-    return Float64(idx)
 end
 
 function compute_phase_fractions!(df, database)
@@ -387,6 +417,7 @@ if database == "ig"
         @mutate(density = case_when(density < 2600 => 2600, density > 4600 => 4600, density > 0 => density))
     end
 end
+    nanfill!(filtereddf)
     return filtereddf
 end
 
@@ -462,8 +493,8 @@ second_dominant_phase_num, unique_phases2, n_phases2 = phase_to_numeric(filtered
 
 # Continuous plotting scale for flow_law, database-dependent.
 if database == "ig"
-    flow_law_ticks = ([1.0, 2.0, 3.0, 4.0], ["1: blueschist", "2: eclogite", "3: greenschist", "4: >15% melt"])
-    flowlaw_cmap = cgrad([:royalblue3, :firebrick3, :darkolivegreen3, :darkorange2], 4, categorical = true)
+    flow_law_ticks = ([1.0, 2.0, 3.0, 4.0], ["1: blueschist", "2: greenschist", "3: eclogite", "4: >15% melt"])
+    flowlaw_cmap = cgrad([:royalblue3, :darkolivegreen3, :firebrick3, :darkorange2], 4, categorical = true)
     flowlaw_colorrange = (0.5, 4.5)
 elseif database == "mtl"
     flow_law_ticks = ([1.0, 2.0, 3.0], ["1: olivine", "2: ring/wad", "3: bridgmanite+fp"])
