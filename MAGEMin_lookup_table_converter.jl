@@ -41,10 +41,10 @@ end
 
 # --- Input parameters start ----
 lookuptabletype = "interface"
-database = "ig"  # "ig" for igneous, "mtl" for mantle
-usescaling = true
+database = "mtl"  # "ig" for igneous, "mtl" for mantle
+usescaling = false
 outputtablefolder = "."
-outputtablefilename = "3200kgm3_mtl.txt"
+outputtablefilename = "1_pyrolite_mtl.txt"
 outputtablefilepath = joinpath(outputtablefolder, outputtablefilename)
 # ---- Input parameters end ----
 
@@ -58,16 +58,16 @@ function generate_dataframe(lookuptabletype, database)
         return df, resolution
     end
     # lookuptabletype == "interface"
-    n = 512
+    n = 128
     resolution = n
-    Prange = repeat(range(0.01, 300, n), outer = n)
-    Trange = repeat(range(0, 1800, n), inner = n)
+    Prange = repeat(range(0.01, 330, n), outer = n)
+    Trange = repeat(range(0, 2000, n), inner = n)
     db = Initialize_MAGEMin(database, verbose = false)
-    # Xoxides = ["SiO2";    "Al2O3";   "CaO";     "MgO";     "FeO";    "Na2O"] # mantle oxides
-    # X =       [45.219696; 4.31225;   3.364569;  38.997326; 8.065189; 0.011995] # pyrolite
-    Xoxides = ["SiO2";    "Al2O3";   "CaO";     "MgO";    "FeO";    "K2O";    "Na2O";   "TiO2";   "O";     "Cr2O3";  "H2O"] # OC oxides
+    Xoxides = ["SiO2";    "Al2O3";   "CaO";     "MgO";     "FeO";    "Na2O"] # mantle oxides
+    X =       [45.219696; 4.31225;   3.364569;  38.997326; 8.065189; 0.011995] # pyrolite
+    # Xoxides = ["SiO2";    "Al2O3";   "CaO";     "MgO";    "FeO";    "K2O";    "Na2O";   "TiO2";   "O";     "Cr2O3";  "H2O"] # ig oxides
     # X =       [50.992811; 15.304009; 10.922183; 7.848858; 9.913537; 0.135232; 2.867050; 1.541733; 0.176099; 0.048487; 0.25] # gabbro
-    X =       [50.376296; 15.118980; 10.790131; 7.753963; 9.793680; 0.133597; 2.832387; 1.523093; 0.17397; 0.047901; 1.456] # basalt
+    # X =       [50.376296; 15.118980; 10.790131; 7.753963; 9.793680; 0.133597; 2.832387; 1.523093; 0.17397; 0.047901; 1.456] # basalt
     # Xoxides = ["SiO2"; "Al2O3"; "CaO"; "MgO"; "FeO"; "K2O"; "Na2O"; "TiO2"; "O"; "MnO"; "H2O"] # garnet-migmatite
     # X = [69.66; 13.76; 1.77; 1.73; 4.32; 2.61; 2.41; 0.8; 0.03; 0.07; 2.82] # garnet-migmatite
     # X = [64.84; 14.99; 3.50; 2.41; 4.90; 2.72; 3.18; 0.62; 0.0; 0.1; 2.71] # average upper continental crust
@@ -361,6 +361,7 @@ elseif lookuptabletype == "interface"
         # but excluded from the PerpleX .txt output via the names filter applied later.
         TidierData.@select(P = var"P_kbar", T = var"T_C", density = var"rho", Cp = var"s_cp", 
             alpha = var"alpha", enthalpy = var"enthalpy", Vp = var"Vp", Vs = var"Vs", bulk_S_wt = var"bulk_S_wt",
+            entropy_S = var"entropy",
             dominant_phase = var"dominant_phase", second_dominant_phase = var"second_dominant_phase", flow_law = var"flow_law", liq_frac_vol = var"liq_frac_vol",
             flow_law_plot_value = var"flow_law_plot_value", dominant_phase_index = var"dominant_phase_index", ep_frac_vol = var"ep_frac_vol")
         # Convert pressure from kbar to bar and temperature from celsius to kelvin. 
@@ -368,13 +369,13 @@ elseif lookuptabletype == "interface"
         # Drop the 'phase' column and reorder the columns for PerpleX format.
         # Reorder columns: standard thermodynamic columns first (required for PerpleX output),
         # then phase-fraction columns last (to be stripped by the names filter before writing .txt).
-        TidierData.@select(T, P, density, alpha, Cp, Vp, Vs, enthalpy, bulk_S_wt, dominant_phase, second_dominant_phase, flow_law, flow_law_plot_value, dominant_phase_index, liq_frac_vol, ep_frac_vol)
+        TidierData.@select(T, P, density, alpha, Cp, Vp, Vs, enthalpy, bulk_S_wt, entropy_S, dominant_phase, second_dominant_phase, flow_law, flow_law_plot_value, dominant_phase_index, liq_frac_vol, ep_frac_vol)
         @arrange(P, T)
         # Rename the column for later use.
         @rename(H20minebound = bulk_S_wt)
     end
     # Convert from array[array] to array
-    for (col, idx) in [(:alpha, 1), (:Cp, 1), (:enthalpy, 1)]
+    for (col, idx) in [(:alpha, 1), (:Cp, 1), (:enthalpy, 1), (:entropy_S, 1)]
         filtereddf[!, col] = getindex.(filtereddf[!, col], idx)
     end
     # H2O bound water: extract last element only when the oxide vector is long enough (i.e. H2O is present);
@@ -423,32 +424,46 @@ end
 
 function write_output(filtereddf, df, lookuptabletype, resolution, outputtablefilepath, outputtablefilename)
 
-open(outputtablefilepath, "w") do io
-    # Ensure index column exists also in file-based input mode.
-    if !(:dominant_phase_index in propertynames(filtereddf))
-        filtereddf[!, :dominant_phase_index] = zeros(nrow(filtereddf))
-    end
+# Ensure index column exists also in file-based input mode.
+if !(:dominant_phase_index in propertynames(filtereddf))
+    filtereddf[!, :dominant_phase_index] = zeros(nrow(filtereddf))
+end
 
-    # Write the metadata and headers in PerpleX format.
-    write(io, 
+# File 1: PerpleX format, without entropy and dominant_phase_index.
+open(outputtablefilepath, "w") do io
+    write(io,
         "|6.6.6\n"                                                  # PerpleX version
         * replace(outputtablefilename, ".txt" => ".tab") * "\n"     # Lookup table name
         * "\t\t2\n"                                                 # No. independent variables (T and P)
         * "T(K)\n"                                                  # Temperature parameters
-        * "\t" * string(filtereddf.T[1]) * "\n"                     # The lower limit of temperature 
-        * "\t" * string(filtereddf.T[2] - filtereddf.T[1]) * "\n"   # The upper limit of temperature
+        * "\t" * string(filtereddf.T[1]) * "\n"                     # The lower limit of temperature
+        * "\t" * string(filtereddf.T[2] - filtereddf.T[1]) * "\n"   # The temperature step
         * "\t\t" * string(resolution) * "\n"                        # Temperature resolution
         * "P(bar)\n"                                                # Pressure parameters
         * "\t" * string(filtereddf.P[1]) * "\n"                     # The lower limit of pressure
-        * "\t" * string(filtereddf.P[resolution + 1] - filtereddf.P[1]) * "\n" # The upper limit of pressure
+        * "\t" * string(filtereddf.P[resolution + 1] - filtereddf.P[1]) * "\n" # The pressure step
         * "\t\t" * string(resolution) * "\n"                        # Pressure resolution
-        * "\t\t10\n"                                                # Number of columns
-        * "T(K)\tP(bar)\ts,J/K/kg\trho,kg/m3\talpha,1/K\tcp,J/K/kg\tvp,km/s\tvs,km/s\th,J/kg\tdominant_phase_index,1\n") # Column names and units
-    # Add dummy entropy column (copy of Cp).
-    filtereddf[!, :s] = filtereddf[!, :Cp]
-    # Write the actual phase diagram data (exclude non-numeric columns).
-    output_df = filtereddf[!, [:T, :P, :s, :density, :alphafilt, :Cp, :Vp, :Vs, :enthalpy, :dominant_phase_index]]
-    writedlm(io, eachrow(output_df), '\t')
+        * "\t\t8\n"                                                 # Number of columns
+        * "T(K)\tP(bar)\trho,kg/m3\talpha,1/K\tcp,J/K/kg\tvp,km/s\tvs,km/s\th,J/kg\n") # Column names and units
+    output_df1 = filtereddf[!, [:T, :P, :density, :alphafilt, :Cp, :Vp, :Vs, :enthalpy]]
+    writedlm(io, eachrow(output_df1), '\t')
+end
+
+# File 2: simple header, with actual MAGEMin entropy and dominant_phase_index.
+let (base, ext) = splitext(outputtablefilepath)
+    outputtablefilepath2 = base * "_rheol" * ext
+    entropy_col = :entropy_S in propertynames(filtereddf) ? filtereddf[!, :entropy_S] : filtereddf[!, :Cp]
+    open(outputtablefilepath2, "w") do io
+        write(io, "# POINTS: $(resolution) $(resolution)\n")
+        write(io, "T(K)\tP(bar)\ts,J/K/kg\trho,kg/m3\talpha,1/K\tcp,J/K/kg\tvp,km/s\tvs,km/s\th,J/kg\tdominant_phase_index,1\n")
+        output_df2 = hcat(
+            filtereddf[!, [:T, :P]],
+            DataFrame(s = entropy_col),
+            filtereddf[!, [:density, :alphafilt, :Cp, :Vp, :Vs, :enthalpy]],
+            DataFrame(dominant_phase_index = filtereddf.dominant_phase_index)
+        )
+        writedlm(io, eachrow(output_df2), '\t')
+    end
 end
 
 # Write the full phase assemblage (all phases + volume fractions) at the first (minimum) temperature
@@ -471,7 +486,7 @@ if lookuptabletype == "interface"
             end
         end
     end
-    CSV.write("first_pressure_column_phases.csv", DataFrame(first_P_rows))
+    # CSV.write("first_pressure_column_phases.csv", DataFrame(first_P_rows))
 end
 end
 
